@@ -343,6 +343,13 @@ function useAudioPlayer() {
                 resolve();
             };
             utterance.onerror = (event) => {
+                // If the speech is cancelled by the user (e.g. by clicking stop), it's not a fatal API error.
+                // We resolve the promise because the operation is complete from the user's perspective.
+                if (event.error === 'canceled' || event.error === 'interrupted') {
+                    console.log('Speech synthesis was intentionally canceled.');
+                    resolve();
+                    return;
+                }
                 console.error('SpeechSynthesisUtterance.onerror', event);
                 setIsPlaying(false);
                 utteranceRef.current = null;
@@ -760,16 +767,11 @@ const SheetSaveStatusIndicator = ({ status }: { status: SheetSaveStatus }) => {
 function EvaluationView({ result, studentInfo, passage, onChooseAnotherPassage, onReadAgain, sheetSaveStatus }) {
     const { playAudio, stopAudio, isPlaying, playTextWithWebSpeech } = useAudioPlayer();
     const [loadingWord, setLoadingWord] = useState<string | null>(null);
-
-    const handlePlayWord = async (word: string) => {
-        if (loadingWord) return; // Prevent multiple requests
-
-        if (isPlaying) {
-            stopAudio();
-            return;
-        }
-        
+    const [currentlyPlayingWord, setCurrentlyPlayingWord] = useState<string | null>(null);
+    
+    const playWord = useCallback(async (word: string) => {
         setLoadingWord(word);
+        setCurrentlyPlayingWord(word); // Set which word is active
         try {
             const audioBase64 = await generateSpeech(word);
             await playAudio(audioBase64);
@@ -779,12 +781,39 @@ function EvaluationView({ result, studentInfo, passage, onChooseAnotherPassage, 
                 await playTextWithWebSpeech(word);
             } catch (fallbackError) {
                 console.error('Web Speech API also failed.', fallbackError);
-                // Optionally show an error to the user
             }
         } finally {
             setLoadingWord(null);
+            setCurrentlyPlayingWord(null); // Clear active word when done
         }
+    }, [playAudio, playTextWithWebSpeech]);
+
+    const handlePlayWord = (word: string) => {
+        // Do nothing if this word is already in the process of loading.
+        if (loadingWord === word) return;
+
+        // If the clicked word is currently playing, stop it.
+        if (isPlaying && currentlyPlayingWord === word) {
+            stopAudio();
+            setCurrentlyPlayingWord(null);
+            return;
+        }
+
+        // If any audio is playing or loading, stop it before starting the new one.
+        if (isPlaying || loadingWord) {
+           stopAudio();
+        }
+        
+        // Start playing the new word.
+        playWord(word);
     };
+
+    // Stop audio when the component unmounts
+    useEffect(() => {
+        return () => {
+            stopAudio();
+        };
+    }, [stopAudio]);
 
 
     if (!result.docDayDu) {
@@ -869,27 +898,31 @@ function EvaluationView({ result, studentInfo, passage, onChooseAnotherPassage, 
                 </h3>
                 {result.tuPhatAmSai.length > 0 ? (
                     <ul className="space-y-3">
-                        {result.tuPhatAmSai.map((word, index) => (
-                            <li key={index} className="bg-white p-3 rounded-lg flex items-center justify-between shadow-sm border">
-                                <p className="font-semibold text-lg text-red-600 line-through">{word.phatAmSai}</p>
-                                <i className="fas fa-long-arrow-alt-right text-gray-400 text-2xl mx-2"></i>
-                                <div className="flex items-center gap-2">
-                                     <p className="font-bold text-lg text-green-600">{word.tu}</p>
-                                      <button
-                                        onClick={() => handlePlayWord(word.tu)}
-                                        disabled={!!loadingWord && loadingWord !== word.tu}
-                                        className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed transition"
-                                        aria-label={`Nghe từ ${word.tu}`}
-                                      >
-                                        {loadingWord === word.tu ? (
-                                          <i className="fas fa-spinner fa-spin"></i>
-                                        ) : (
-                                          <i className={`fas ${isPlaying ? 'fa-stop' : 'fa-volume-up'}`}></i>
-                                        )}
-                                      </button>
-                                </div>
-                            </li>
-                        ))}
+                        {result.tuPhatAmSai.map((word, index) => {
+                            const isThisWordLoading = loadingWord === word.tu;
+                            const isThisWordPlaying = isPlaying && currentlyPlayingWord === word.tu;
+                            return (
+                                <li key={index} className="bg-white p-3 rounded-lg flex items-center justify-between shadow-sm border">
+                                    <p className="font-semibold text-lg text-red-600 line-through">{word.phatAmSai}</p>
+                                    <i className="fas fa-long-arrow-alt-right text-gray-400 text-2xl mx-2"></i>
+                                    <div className="flex items-center gap-2">
+                                         <p className="font-bold text-lg text-green-600">{word.tu}</p>
+                                          <button
+                                            onClick={() => handlePlayWord(word.tu)}
+                                            disabled={isThisWordLoading}
+                                            className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed transition"
+                                            aria-label={`Nghe từ ${word.tu}`}
+                                          >
+                                            {isThisWordLoading ? (
+                                              <i className="fas fa-spinner fa-spin"></i>
+                                            ) : (
+                                              <i className={`fas ${isThisWordPlaying ? 'fa-stop' : 'fa-volume-up'}`}></i>
+                                            )}
+                                          </button>
+                                    </div>
+                                </li>
+                            );
+                        })}
                     </ul>
                 ) : (
                     <div className="text-center bg-white p-4 rounded-lg border">
