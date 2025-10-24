@@ -39,7 +39,8 @@ type Page = 'welcome' | 'passage-list' | 'reading' | 'evaluation';
 type SheetSaveStatus = 'idle' | 'saving' | 'success' | 'error';
 
 // --- Inlined from constants.ts ---
-const READING_PASSAGES = [
+// FIX: Explicitly type the READING_PASSAGES array to ensure each object conforms to the Passage interface, resolving type inference issues.
+const READING_PASSAGES: Passage[] = [
     // TẬP 1
     { id: 1, volume: 1, title: 'Bài 1: Tôi là học sinh lớp 2', content: 'Ngày khai trường đã đến. Sáng sớm, mẹ mới gọi một câu mà tôi đã vùng dậy, khác hẳn mọi ngày. Loáng một cái, tôi đã chuẩn bị xong mọi thứ. Bố ngạc nhiên nhìn tôi, còn mẹ cười tủm tỉm. Tôi rối rít: “Con muốn đến sớm nhất lớp”.\nTôi háo hức tưởng tượng ra cảnh mình đến đầu tiên, cất tiếng chào thật to những bạn đến sau. Nhưng vừa đến cổng trường, tôi đã thấy mấy bạn cùng lớp đang ríu rít nói cười ở trong sân. Thì ra, không chỉ mình tôi muốn đến sớm nhất. Tôi chào mẹ, chạy ào vào cùng các bạn.' },
     { id: 2, volume: 1, title: 'Bài 2: Ngày hôm qua đâu rồi?', content: 'Em cầm tờ lịch cũ:\n– Ngày hôm qua đâu rồi?\nRa ngoài sân hỏi bố\nXoa đầu em, bố cười:\n\n– Ngày hôm qua ở lại\nTrên cành hoa trong vườn\nNụ hồng lớn lên mãi\nĐợi đến ngày toả hương.\n\n– Ngày hôm qua ở lại\nTrong hạt lúa mẹ trồng\nCánh đồng chờ gặt hái\nChín vàng màu ước mong.\n\n– Ngày hôm qua ở lại\nTrong vở hồng của con\nCon học hành chăm chỉ\nLà ngày qua vẫn còn.' },
@@ -319,7 +320,6 @@ function useAudioPlayer() {
   }, []);
   
   const playTextWithWebSpeech = useCallback((text) => {
-    // FIX: Add <void> to new Promise to resolve TypeScript error.
     return new Promise<void>((resolve, reject) => {
         stopAudio();
         if (!('speechSynthesis' in window)) {
@@ -329,29 +329,42 @@ function useAudioPlayer() {
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'vi-VN';
         
-        const voices = window.speechSynthesis.getVoices();
-        const vietnameseVoice = voices.find(voice => voice.lang === 'vi-VN');
-        if (vietnameseVoice) {
-            utterance.voice = vietnameseVoice;
-        }
+        const loadVoicesAndSpeak = () => {
+            const voices = window.speechSynthesis.getVoices();
+            const vietnameseVoice = voices.find(voice => voice.lang === 'vi-VN');
+            if (vietnameseVoice) {
+                utterance.voice = vietnameseVoice;
+            }
 
-        utterance.onstart = () => setIsPlaying(true);
-        utterance.onend = () => {
-            setIsPlaying(false);
-            utteranceRef.current = null;
-            resolve();
-        };
-        utterance.onerror = (event) => {
-            console.error('SpeechSynthesisUtterance.onerror', event);
-            setIsPlaying(false);
-            utteranceRef.current = null;
-            reject(new Error(`Lỗi phát âm: ${event.error}`));
+            utterance.onstart = () => setIsPlaying(true);
+            utterance.onend = () => {
+                setIsPlaying(false);
+                utteranceRef.current = null;
+                resolve();
+            };
+            utterance.onerror = (event) => {
+                console.error('SpeechSynthesisUtterance.onerror', event);
+                setIsPlaying(false);
+                utteranceRef.current = null;
+                reject(new Error(`Lỗi phát âm: ${event.error}`));
+            };
+            
+            utteranceRef.current = utterance;
+            window.speechSynthesis.speak(utterance);
         };
         
-        utteranceRef.current = utterance;
-        window.speechSynthesis.speak(utterance);
+        // Voices might load asynchronously.
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length === 0) {
+            window.speechSynthesis.onvoiceschanged = () => {
+                window.speechSynthesis.onvoiceschanged = null; // Prevent multiple calls
+                loadVoicesAndSpeak();
+            };
+        } else {
+            loadVoicesAndSpeak();
+        }
     });
-  }, [stopAudio]);
+}, [stopAudio]);
 
   const playAudio = useCallback(async (base64Audio) => {
     stopAudio(); 
@@ -383,14 +396,6 @@ function useAudioPlayer() {
         throw new Error('Không thể phát âm thanh.');
     }
   }, [stopAudio]);
-
-  useEffect(() => {
-    if ('speechSynthesis' in window && window.speechSynthesis.getVoices().length === 0) {
-        const voiceHandler = () => {};
-        window.speechSynthesis.onvoiceschanged = voiceHandler;
-        return () => window.speechSynthesis.onvoiceschanged = null;
-    }
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -541,13 +546,9 @@ function WelcomeScreen({ onStart }) {
   );
 }
 
-// --- Inlined from components/PassageList.tsx ---
-function PassageList({ studentInfo, onSelectPassage, onBackToWelcome }) {
-  const passagesVol1 = READING_PASSAGES.filter(p => p.volume === 1);
-  const passagesVol2 = READING_PASSAGES.filter(p => p.volume === 2);
-
-  // FIX: Add explicit prop types to component to avoid excess property errors with `key`.
-  const PassageCard = ({ passage, onSelect }: { passage: Passage, onSelect: (passage: Passage) => void }) => (
+// --- Helper Component for PassageList ---
+// Moved outside PassageList to prevent re-definition on every render and fix potential React errors.
+const PassageCard = ({ passage, onSelect }: { passage: Passage; onSelect: (passage: Passage) => void }) => (
     <button
         onClick={() => onSelect(passage)}
         className="bg-white p-6 rounded-xl shadow-md hover:shadow-xl hover:bg-yellow-50 transition-all text-left transform hover:-translate-y-1 border border-gray-200"
@@ -555,7 +556,13 @@ function PassageList({ studentInfo, onSelectPassage, onBackToWelcome }) {
         <h2 className="text-xl font-bold text-blue-700">{passage.title}</h2>
         <p className="text-gray-500 mt-2 line-clamp-3 leading-snug">{passage.content}</p>
     </button>
-  );
+);
+
+
+// --- Inlined from components/PassageList.tsx ---
+function PassageList({ studentInfo, onSelectPassage, onBackToWelcome }) {
+  const passagesVol1 = READING_PASSAGES.filter(p => p.volume === 1);
+  const passagesVol2 = READING_PASSAGES.filter(p => p.volume === 2);
 
   return (
     <div className="min-h-screen bg-blue-50 p-4 sm:p-8">
@@ -599,7 +606,7 @@ function ReadingView({ passage, onBack, onFinishRecording }) {
   const { isRecording, startRecording, stopRecording, error: recorderError } = useAudioRecorder();
   const { isPlaying: isSamplePlaying, playAudio: playSampleAudio, stopAudio: stopSampleAudio, playTextWithWebSpeech } = useAudioPlayer();
   const [isGeneratingSpeech, setIsGeneratingSpeech] = useState(false);
-  const [ttsError, setTtsError] = useState(null);
+  const [ttsError, setTtsError] = useState<string | null>(null);
 
   const handleListenSample = async () => {
     if (isSamplePlaying) {
@@ -614,8 +621,9 @@ function ReadingView({ passage, onBack, onFinishRecording }) {
         const audioBase64 = await generateSpeech(passage.content);
         await playSampleAudio(audioBase64);
     } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Lỗi không xác định.';
         console.warn('Gemini TTS failed, falling back to Web Speech API.', err);
-        setTtsError(err.message || 'Lỗi không xác định.');
+        setTtsError(errorMessage);
         try {
             await playTextWithWebSpeech(passage.content);
         } catch (fallbackError) {
@@ -698,8 +706,9 @@ function ReadingView({ passage, onBack, onFinishRecording }) {
   );
 }
 
-// --- Inlined from components/EvaluationView.tsx ---
-const ScoreBar = ({ label, score, colorClass }) => (
+// --- Helper Components for EvaluationView ---
+// Moved outside EvaluationView to prevent re-definition on every render.
+const ScoreBar = ({ label, score, colorClass }: { label: string; score: number; colorClass: string }) => (
   <div>
     <div className="flex justify-between items-center mb-1">
       <span className="font-semibold text-gray-700">{label}</span>
@@ -714,7 +723,7 @@ const ScoreBar = ({ label, score, colorClass }) => (
   </div>
 );
 
-const SheetSaveStatusIndicator = ({ status }) => {
+const SheetSaveStatusIndicator = ({ status }: { status: SheetSaveStatus }) => {
     if (status === 'idle') return null;
 
     if (status === 'saving') {
@@ -746,12 +755,14 @@ const SheetSaveStatusIndicator = ({ status }) => {
     return null;
 };
 
+
+// --- Inlined from components/EvaluationView.tsx ---
 function EvaluationView({ result, studentInfo, passage, onChooseAnotherPassage, onReadAgain, sheetSaveStatus }) {
     const { playAudio, stopAudio, isPlaying, playTextWithWebSpeech } = useAudioPlayer();
-    const [loadingWord, setLoadingWord] = useState(null);
+    const [loadingWord, setLoadingWord] = useState<string | null>(null);
 
-    const handlePlayWord = async (word) => {
-        if (loadingWord) return;
+    const handlePlayWord = async (word: string) => {
+        if (loadingWord) return; // Prevent multiple requests
 
         if (isPlaying) {
             stopAudio();
@@ -866,7 +877,7 @@ function EvaluationView({ result, studentInfo, passage, onChooseAnotherPassage, 
                                      <p className="font-bold text-lg text-green-600">{word.tu}</p>
                                       <button
                                         onClick={() => handlePlayWord(word.tu)}
-                                        disabled={loadingWord && loadingWord !== word.tu}
+                                        disabled={!!loadingWord && loadingWord !== word.tu}
                                         className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed transition"
                                         aria-label={`Nghe từ ${word.tu}`}
                                       >
@@ -1042,4 +1053,4 @@ root.render(
   </React.StrictMode>,
 );
 
-// --- END OF INLINED SCRIPT ------ START OF FILE types.ts ------ START OF FILE constants.ts ------ START OF FILE services/geminiService.ts ------ START OF FILE hooks/useAudioRecorder.ts ------ START OF FILE components/WelcomeScreen.tsx ------ START OF FILE components/PassageList.tsx ------ START OF FILE components/ReadingView.tsx ------ START OF FILE components/EvaluationView.tsx ------ START OF FILE components/Spinner.tsx ------ START OF FILE App.tsx ------ START OF FILE services/sheetService.ts ------ START OF FILE hooks/useAudioPlayer.ts ---
+// --- END OF INLINED SCRIPT ---
