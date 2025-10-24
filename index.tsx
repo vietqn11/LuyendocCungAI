@@ -108,8 +108,10 @@ const READING_PASSAGES: Passage[] = [
 ];
 
 // --- Inlined from services/geminiService.ts ---
-// FIX: Use environment variable for API key instead of hardcoding it.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// FIX: Safely access process.env.API_KEY to prevent ReferenceError in browser environments.
+// The API key is expected to be provided by the execution environment.
+const apiKey = typeof process !== 'undefined' ? process.env.API_KEY : undefined;
+const ai = new GoogleGenAI({ apiKey });
 
 const schema = {
     type: Type.OBJECT,
@@ -331,9 +333,13 @@ function useAudioPlayer() {
         
         const loadVoicesAndSpeak = () => {
             const voices = window.speechSynthesis.getVoices();
-            const vietnameseVoice = voices.find(voice => voice.lang === 'vi-VN');
+            // FIX: Find the best Vietnamese voice available. Prioritize 'vi-VN', then any 'vi' voice.
+            const vietnameseVoice = voices.find(voice => voice.lang === 'vi-VN') || voices.find(voice => voice.lang.startsWith('vi'));
+            
             if (vietnameseVoice) {
                 utterance.voice = vietnameseVoice;
+            } else {
+                console.warn('Không tìm thấy giọng đọc Tiếng Việt. Sử dụng giọng mặc định của trình duyệt.');
             }
 
             utterance.onstart = () => setIsPlaying(true);
